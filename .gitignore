@@ -197,3 +197,11 @@ cython_debug/
 .cursorindexingignore
 
 node_modules/
+
+# Terraform local and sensitive files
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+tfplan*
+crash.log
+crash.*.log
