@@ -35,7 +35,19 @@ jobs:
             --resource-group ${{ vars.AKS_RESOURCE_GROUP }} \
             --name ${{ vars.AKS_CLUSTER_NAME }} \
             --overwrite-existing
+      - name: Set up Helm
+        uses: azure/setup-helm@v5
+        with:
+          version: "v3.18.4"
 
+      - name: Deploy Prometheus and Grafana
+        run: |
+          helm upgrade --install prometheus \
+            oci://ghcr.io/prometheus-community/charts/kube-prometheus-stack \
+            --namespace monitoring \
+            --create-namespace \
+            --wait \
+            --timeout 15m
       - name: Create production namespace
         run: |
           kubectl create namespace production \
@@ -141,7 +153,46 @@ jobs:
           kubectl rollout status deployment/enrollment-service \
             -n production \
             --timeout=300s
+      - name: Validate monitoring components
+        run: |
+          echo "=== Helm monitoring release ==="
+          helm list -n monitoring
 
+          echo "=== Monitoring pods ==="
+          kubectl get pods -n monitoring
+
+          echo "=== Monitoring services ==="
+          kubectl get services -n monitoring
+
+          kubectl rollout status \
+            deployment/prometheus-grafana \
+            -n monitoring \
+            --timeout=300s
+
+      - name: Verify Prometheus is collecting metrics
+        run: |
+          kubectl port-forward \
+            -n monitoring \
+            service/prometheus-kube-prometheus-prometheus \
+            9090:9090 > /tmp/prometheus-port-forward.log 2>&1 &
+
+          PORT_FORWARD_PID=$!
+          trap 'kill $PORT_FORWARD_PID 2>/dev/null || true' EXIT
+
+          for attempt in {1..30}; do
+            if curl --silent --fail \
+              http://127.0.0.1:9090/-/ready; then
+              break
+            fi
+            sleep 2
+          done
+
+          METRIC_COUNT="$(curl --silent --fail \
+            'http://127.0.0.1:9090/api/v1/query?query=up' |
+            jq '.data.result | length')"
+
+          echo "Prometheus metric series returned: $METRIC_COUNT"
+          test "$METRIC_COUNT" -gt 0
       - name: Show production resources
         run: |
           kubectl get pods -n production
